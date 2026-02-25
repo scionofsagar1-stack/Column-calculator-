@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.scionofsagar1_stack.twa",
+        "sha256_cert_fingerprints": ["95:98:F0:36:84:E7:56:C5:9A:AA:F2:B9:0A:18:31:66:CC:7B:CC:BC:11:DB:86:ED:6E:19:B2:0D:89:28:26:C0"]
+      }
+    }]
