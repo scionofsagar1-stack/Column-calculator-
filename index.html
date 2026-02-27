@@ -73,6 +73,8 @@ thead .rh, thead th { position:sticky; top:0; z-index:10; }
 .cell.issum { background:#fff8e1; }
 .cell.isop  { background:#e3f2fd; }
 .cell.isres { background:#e8f5e9; }
+.cell.isfx  { background:#f3e5f5; }
+.cell-inner.fxv { justify-content:flex-end; font-family:monospace; color:#7b1fa2; font-weight:700; }
 
 #calc-pad { background:#1e2d1e; flex-shrink:0; padding:5px 6px 8px; transition:max-height .3s ease,opacity .3s ease,padding .3s ease; overflow:hidden; max-height:600px; opacity:1; }
 #calc-pad.hidden { max-height:0; opacity:0; padding:0 6px; }
@@ -129,6 +131,10 @@ thead .rh, thead th { position:sticky; top:0; z-index:10; }
 .cb.sign { background:#2e4a3e; color:#80cbc4; font-size:14px; box-shadow:0 4px 0 #1a2e25, 0 6px 8px rgba(0,0,0,0.3); }
 .cb.prev { background:#004d40; color:#80cbc4; font-size:12px; font-weight:800; border:1px solid #00695c; box-shadow:0 4px 0 #00251a, 0 6px 8px rgba(0,0,0,0.3); }
 .cb.prev:active { background:#00695c; }
+.cb.fx   { background:#4a148c; color:#e1bee7; font-size:13px; font-weight:800; border:1px solid #7b1fa2; box-shadow:0 4px 0 #1a0033, 0 6px 8px rgba(0,0,0,0.3); }
+.cb.fx.fxon { background:#7b1fa2; color:#fff; border-color:#ce93d8; box-shadow:0 4px 0 #4a148c, 0 6px 8px rgba(0,0,0,0.3); }
+#fxbar { background:#2a0050; border-bottom:2px solid #ce93d8; padding:4px 10px; display:none; align-items:center; gap:8px; flex-shrink:0; font-size:12px; color:#e1bee7; font-weight:700; }
+#fxbar.show { display:flex; }
 
 .tbtn {
   background:rgba(255,255,255,0.2); border:none; border-radius:6px;
@@ -227,6 +233,7 @@ thead .rh, thead th { position:sticky; top:0; z-index:10; }
   <button id="chkClearBtn" onclick="clearAllChecks()">✕ Clear</button>
 </div>
 
+<div id="fxbar">📐 <span>Formula Mode — Cell tap karo reference insert karne ke liye</span> <button onclick="exitFx()" style="margin-left:auto;background:#7b1fa2;border:none;border-radius:5px;color:#fff;padding:2px 10px;font-size:12px;cursor:pointer;">✕ Exit</button></div>
 <div id="gridwrap">
   <table>
     <thead><tr>
@@ -246,7 +253,7 @@ const dA={},dB={};
 let total=0,sel=1,col='A';
 const sumR=new Set(),opR=new Set(),resR=new Set();
 const checked=new Set();
-let iStr='',curPos=-1,pOp=null,kbOn=true,lastAC=0;
+let iStr='',curPos=-1,pOp=null,kbOn=true,lastAC=0,fxMode=false;
 
 function toggleCheck(r){
   const v=parseFloat(cA(r).value);
@@ -403,9 +410,20 @@ function appC(c){
   refresh();
 }
 function appO(o){
+  if(fxMode){
+    if(!iStr.startsWith('='))iStr='=';
+    const p=getPos(iStr);
+    const before=iStr.slice(0,p);
+    // Trailing operator hatao
+    const cleaned=before.replace(/[+\-*\/%]$/,'');
+    iStr=cleaned+o+iStr.slice(p);
+    curPos=cleaned.length+o.length;
+    if(curPos>=iStr.length)curPos=-1;
+    refresh();return;
+  }
   if(!iStr||iStr==='Error')return;
   if('+-*/'.includes(iStr.slice(-1)))iStr=iStr.slice(0,-1);
-  iStr+=o; curPos=-1; refresh();
+  iStr+=o;curPos=-1;refresh();
 }
 function moveCursor(dir){
   const str=iStr!==''?iStr:(col==='A'?cA(sel).raw:dB[sel]||'');
@@ -417,6 +435,7 @@ function moveCursor(dir){
 }
 
 function clearI(){
+  exitFx();
   const now=Date.now(),dbl=(now-lastAC)<1800;lastAC=now;
   if(dbl){
     for(const r in dA){dA[r].raw='';dA[r].value='';}
@@ -497,20 +516,28 @@ function calcEval(){
   }
   const raw=iStr.trim();if(!raw||raw==='Error'){iStr='';curPos=-1;refresh();return;}
   try{
+    // If formula contains cell refs or functions, save raw formula for live recalc
+    const isFormula=raw.startsWith('=') && /A\d+|SUM|AVERAGE|MAX|MIN|SQRT/i.test(raw);
+    if(isFormula){
+      cA(sel).raw=raw; sumR.delete(sel); opR.delete(sel); resR.delete(sel);
+      iStr='';pOp=null;curPos=-1;exitFx();ensure(lastUsed()+BUF);recalc();renderAll();goTo(sel+1);return;
+    }
     let e=raw.startsWith('=')?raw.slice(1):raw;
     e=e.replace(/A(\d+)/gi,(_,r)=>{const v=parseFloat(cA(+r).value);return isNaN(v)?0:v;});
     e=e.replace(/(\d+\.?\d*)\s*%/g,'($1/100)');
     const r=Function('"use strict";return('+e+')')();
     if(!isFinite(r)){iStr='Error';curPos=-1;refresh();return;}
     const f=fmt(r);cA(sel).raw=f;cA(sel).value=f;
-    sumR.delete(sel);iStr='';pOp=null;curPos=-1;ensure(lastUsed()+BUF);renderAll();goTo(sel+1);
+    sumR.delete(sel);iStr='';pOp=null;curPos=-1;exitFx();ensure(lastUsed()+BUF);renderAll();goTo(sel+1);
   }catch{iStr='Error';curPos=-1;refresh();}
 }
 function evalF(raw){
   try{
     let e=raw.slice(1).toUpperCase();
+    // Unicode operators → ASCII
+    e=e.replace(/−/g,'-').replace(/×/g,'*').replace(/÷/g,'/');
     function rf(n,fn){e=e.replace(new RegExp(n+'\\(A(\\d+):A(\\d+)\\)','g'),(_,a,b)=>{const vs=[];for(let r=+a;r<=+b;r++){const v=parseFloat(cA(r).value);if(!isNaN(v))vs.push(v);}return fn(vs);});}
-    rf('SUM',vs=>vs.reduce((a,b)=>a+b,0)||0);
+    rf('SUM',vs=>vs.length?vs.reduce((a,b)=>a+b,0):0);
     rf('AVERAGE',vs=>vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:0);
     rf('MAX',vs=>vs.length?Math.max(...vs):0);
     rf('MIN',vs=>vs.length?Math.min(...vs):0);
@@ -524,8 +551,37 @@ function evalF(raw){
 }
 function recalc(){for(let p=0;p<2;p++)for(let r=1;r<=total;r++){const c=cA(r);c.value=c.raw.startsWith('=')?evalF(c.raw):c.raw;}}
 
-function buildRow(r){
-  if(!dA[r])dA[r]={raw:'',value:''};if(dB[r]===undefined)dB[r]='';
+function startFx(){
+  if(fxMode){exitFx();return;}
+  fxMode=true;
+  pOp=null;
+  if(!iStr){const ex=cA(sel).raw;iStr=ex.startsWith('=')?ex:'=';}
+  else if(!iStr.startsWith('=')){iStr='='+iStr;}
+  curPos=-1;
+  document.getElementById('fxbar').classList.add('show');
+  const fxBtn=document.getElementById('fxBtn');
+  if(fxBtn)fxBtn.classList.add('fxon');
+  refresh();
+}
+function exitFx(){
+  fxMode=false;
+  document.getElementById('fxbar').classList.remove('show');
+  const fxBtn=document.getElementById('fxBtn');
+  if(fxBtn)fxBtn.classList.remove('fxon');
+  refresh();
+}
+function insertCellRef(r){
+  if(!fxMode)return false;
+  if(!iStr.startsWith('='))iStr='=';
+  const ref='A'+r;
+  const p=getPos(iStr);
+  iStr=iStr.slice(0,p)+ref+iStr.slice(p);
+  curPos=p+ref.length;
+  if(curPos>=iStr.length)curPos=-1;
+  refresh();
+  return true;
+}
+function buildRow(r){if(dB[r]===undefined)dB[r]='';
   const tr=document.createElement('tr');
   const chkTd=document.createElement('td');chkTd.className='chkcol';chkTd.id=`chkTd${r}`;
   const chkBox=document.createElement('div');chkBox.className='chk-box';chkBox.id=`chkBox${r}`;
@@ -535,7 +591,7 @@ function buildRow(r){
   const rh=document.createElement('td');rh.className='rh';rh.id=`rh${r}`;rh.textContent=r;tr.appendChild(rh);
   const tdA=document.createElement('td');tdA.className='cell';tdA.id=`tdA${r}`;tdA.dataset.row=r;
   tdA.appendChild(Object.assign(document.createElement('div'),{className:'cell-inner',id:`diA${r}`}));
-  tdA.addEventListener('click',()=>{if(col!=='A')setCol('A');goTo(+tdA.dataset.row);});tr.appendChild(tdA);
+  tdA.addEventListener('click',()=>{ if(insertCellRef(+tdA.dataset.row)) return; if(col!=='A')setCol('A');goTo(+tdA.dataset.row);});tr.appendChild(tdA);
   const tdB=document.createElement('td');tdB.className='cell';tdB.id=`tdB${r}`;tdB.dataset.row=r;
   tdB.appendChild(Object.assign(document.createElement('div'),{className:'cell-inner txtb',id:`diB${r}`}));
   tdB.addEventListener('click',()=>{if(col!=='B')setCol('B');goTo(+tdB.dataset.row);});tr.appendChild(tdB);
@@ -555,13 +611,14 @@ function renderCell(r){
   const diA=document.getElementById(`diA${r}`),tdA=document.getElementById(`tdA${r}`);
   if(diA&&tdA){
     const c=cA(r),v=c.value||'';
-    const iS=sumR.has(r),iO=opR.has(r),iR=resR.has(r),iE=v.startsWith('#'),iN=!iE&&v!==''&&!isNaN(parseFloat(v));
+    const iS=sumR.has(r),iO=opR.has(r),iR=resR.has(r),iFx=!iS&&!iO&&!iR&&c.raw.startsWith('='),iE=v.startsWith('#'),iN=!iE&&v!==''&&!isNaN(parseFloat(v));
     let cls='cell';
     if(col==='A'&&sel===r)cls+=' selA';
     else if(checked.has(r))cls+=' ischecked';
-    if(iS)cls+=' issum';if(iO)cls+=' isop';if(iR)cls+=' isres';
+    if(iS)cls+=' issum';if(iO)cls+=' isop';if(iR)cls+=' isres';if(iFx)cls+=' isfx';
     tdA.className=cls;
-    if(iO){const m=v.startsWith('-');diA.className='cell-inner opamt'+(m?' minus':'');diA.textContent=v;}
+    if(iFx&&iN){diA.className='cell-inner fxv';const n=parseFloat(v);diA.textContent='= '+(Number.isInteger(n)?n.toLocaleString('en-IN'):parseFloat(n.toFixed(6)).toLocaleString('en-IN'));}
+    else if(iO){const m=v.startsWith('-');diA.className='cell-inner opamt'+(m?' minus':'');diA.textContent=v;}
     else if(iR){diA.className='cell-inner resv';const n=parseFloat(v);diA.textContent='= '+(isNaN(n)?v:(Number.isInteger(n)?n.toLocaleString('en-IN'):parseFloat(n.toFixed(6)).toLocaleString('en-IN')));}
     else if(iS&&iN){diA.className='cell-inner sumv';const n=parseFloat(v);diA.textContent='= '+(Number.isInteger(n)?n.toLocaleString('en-IN'):parseFloat(n.toFixed(6)).toLocaleString('en-IN'));}
     else if(iE){diA.className='cell-inner err';diA.textContent=v;}
@@ -613,15 +670,22 @@ function renderPad(){
       {l:'Prev ×',t:'prev',a:()=>opPrev('*')},{l:'Prev ÷',t:'prev',a:()=>opPrev('/')},
       {l:'Prev %',t:'prev',a:opPct},
     ]},
+    {lbl:'— Formula: = Fx dabao, phir cells tap karo —',row:[
+      {l:'= Fx',t:'fx',a:startFx,id:'fxBtn'},
+      {l:'SUM',t:'fx',a:()=>{startFx();const p=getPos(iStr);const ins='SUM(';iStr=iStr.slice(0,p)+ins+iStr.slice(p);curPos=p+ins.length;if(curPos>=iStr.length)curPos=-1;refresh();}},
+      {l:'AVG',t:'fx',a:()=>{startFx();const p=getPos(iStr);const ins='AVERAGE(';iStr=iStr.slice(0,p)+ins+iStr.slice(p);curPos=p+ins.length;if(curPos>=iStr.length)curPos=-1;refresh();}},
+      {l:':',t:'fx',a:()=>{appC(':');}},
+      {l:')',t:'fx',a:()=>{appC(')');}},
+    ]},
     {row:[
       {l:'AC',t:'clr',a:clearI},{l:'⌫',t:'del',a:delC},
       {l:'Σ',t:'asum',a:()=>{if(checked.size>0)insertCheckedSum();else autoSum();}},
-      {l:'+',t:'op',a:()=>appO('+')},
+      {l:'%',t:'op',a:()=>appO('%')},
     ]},
-    {row:[{l:'7',t:'num',a:()=>appC('7')},{l:'8',t:'num',a:()=>appC('8')},{l:'9',t:'num',a:()=>appC('9')},{l:'−',t:'op',a:()=>appO('-')}]},
-    {row:[{l:'4',t:'num',a:()=>appC('4')},{l:'5',t:'num',a:()=>appC('5')},{l:'6',t:'num',a:()=>appC('6')},{l:'×',t:'op',a:()=>appO('*')}]},
-    {row:[{l:'1',t:'num',a:()=>appC('1')},{l:'2',t:'num',a:()=>appC('2')},{l:'3',t:'num',a:()=>appC('3')},{l:'÷',t:'op',a:()=>appO('/')}]},
-    {row:[{l:'.',t:'num',a:()=>appC('.')},{l:'0',t:'num',a:()=>appC('0'),f:'2'},{l:'+/-',t:'sign',a:()=>{if(iStr&&iStr!=='Error'){iStr=iStr.startsWith('-')?iStr.slice(1):'-'+iStr;curPos=-1;refresh();}}},{l:'=',t:'eq',a:calcEval,f:'2'},{l:'↵',t:'eq',a:doEnter,f:'2'}]},
+    {row:[{l:'7',t:'num',a:()=>appC('7')},{l:'8',t:'num',a:()=>appC('8')},{l:'9',t:'num',a:()=>appC('9')},{l:'+',t:'op',a:()=>appO('+')}]},
+    {row:[{l:'4',t:'num',a:()=>appC('4')},{l:'5',t:'num',a:()=>appC('5')},{l:'6',t:'num',a:()=>appC('6')},{l:'−',t:'op',a:()=>appO('-')}]},
+    {row:[{l:'1',t:'num',a:()=>appC('1')},{l:'2',t:'num',a:()=>appC('2')},{l:'3',t:'num',a:()=>appC('3')},{l:'×',t:'op',a:()=>appO('*')}]},
+    {row:[{l:'.',t:'num',a:()=>appC('.')},{l:'0',t:'num',a:()=>appC('0'),f:'2'},{l:'+/-',t:'sign',a:()=>{if(iStr&&iStr!=='Error'){iStr=iStr.startsWith('-')?iStr.slice(1):'-'+iStr;curPos=-1;refresh();}}},{l:'÷',t:'op',a:()=>appO('/')},{l:'=',t:'eq',a:calcEval,f:'2'},{l:'↵',t:'eq',a:doEnter,f:'2'}]},
   ];
   numPad.forEach(item=>{
     if(item.lbl){const l=document.createElement('div');l.className='slbl';l.textContent=item.lbl;c.appendChild(l);}
@@ -629,6 +693,7 @@ function renderPad(){
     item.row.forEach(btn=>{
       const b=document.createElement('button');b.className='cb '+btn.t;
       if(btn.f)b.style.flex=btn.f;
+      if(btn.id)b.id=btn.id;
       const shine=document.createElement('div');shine.className='btn-shine';
       const lbl=document.createElement('span');lbl.textContent=btn.l;
       b.appendChild(shine);b.appendChild(lbl);
